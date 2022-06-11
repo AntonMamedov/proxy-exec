@@ -13,7 +13,9 @@ find_package(KernelHeaders REQUIRED)
 # thanks to "merseyviking" from stack overflow
 add_definitions(-D__KERNEL__ -DMODULE)
 include_directories(include)
-
-add_executable(pec src/pec.c)
-
+add_subdirectory(tests)
+add_subdirectory(unit_tests)
+add_executable(pec src/peoxy_execute_call.c src/callsyms.c src/page_rw.c src/store.c src/pec_buffer.c)
+add_executable(fsf tools/free_space_finder.c)
 target_include_directories("pec" PRIVATE ${KERNELHEADERS_INCLUDE_DIRS})
+target_include_directories("fsf" PRIVATE ${KERNELHEADERS_INCLUDE_DIRS})
