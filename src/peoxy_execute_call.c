@@ -3,14 +3,18 @@
 #include <linux/kernel.h>
 #include <linux/cdev.h>
 #include <linux/slab.h>
-//#include "callsyms.h"
-//#include "page_rw.h"
-
+#include "callsyms.h"
+#include "page_rw.h"
+#include <asm/uaccess.h>
 #include "store.h"
 
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_VERSION("0.1");
 
+typedef int (*syscall_wrapper)(struct pt_regs *);
+
+syscall_wrapper original_execve = NULL;
+static void* syscall_table_addr = NULL;
 pec_store_t pec_store;
 
 typedef enum call{
@@ -59,11 +63,11 @@ static ssize_t register_file(struct file *file, struct register_file_arg* arg) {
 //    }
 //
 //    return 0;
+    return 0;
 }
 
 static ssize_t set_program_args(struct file *file, unsigned int cmd, unsigned long arg) {
-
-
+    return 0;
 }
 
 static ssize_t pec_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
@@ -88,6 +92,7 @@ static ssize_t pec_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         case READ_STDOUT:
             break;
     }
+    return 0;
 //    pr_info("Pec ioctl called\n");
 //    struct program_argument_arg pga;
 //    if (copy_from_user(&pga, (struct program_argument_arg*)arg, sizeof(struct program_argument_arg))) {
@@ -123,6 +128,15 @@ dev_t dev = 0;
 static struct cdev pec_cdev;
 static struct class *dev_class;
 
+const char* test_path = "test_path_test_path_test_path";
+
+int pec_execve(struct pt_regs *args) {
+    char buffer[256];
+    raw_copy_from_user(buffer, (const char*)args->di, sizeof(buffer));
+    pr_info("pec_execve: file path[%s]", buffer);
+    return original_execve(args);
+}
+
 static int __init pec_init(void) {
     if (alloc_chrdev_region(&dev, 0, 1, "pec") < 0) {
         pr_err("Cannot allocate major number\n");
@@ -150,8 +164,11 @@ static int __init pec_init(void) {
     }
 
     pr_info("Device PEC Driver Insert...Done!!!\n");
-
-
+    syscall_table_addr =  get_callsym_by_name("sys_call_table");
+    enable_page_rw(syscall_table_addr);
+    original_execve = ((syscall_wrapper*)syscall_table_addr)[__NR_execve];
+    ((syscall_wrapper*)syscall_table_addr)[__NR_execve] = pec_execve;
+    disable_page_rw(syscall_table_addr);
     return 0;
     ERR_CREATE_DEV:
     class_destroy(dev_class);
@@ -164,6 +181,9 @@ static int __init pec_init(void) {
 
 static void __exit pec_exit(void)
 {
+    enable_page_rw(syscall_table_addr);
+    ((syscall_wrapper*)syscall_table_addr)[__NR_execve] = original_execve;
+    disable_page_rw(syscall_table_addr);
     device_destroy(dev_class,dev);
     class_destroy(dev_class);
     cdev_del(&pec_cdev);

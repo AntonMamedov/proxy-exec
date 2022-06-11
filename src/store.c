@@ -1,5 +1,5 @@
 #include "store.h"
-
+#define PEC_STORE_LINUX_KERNEL_BUILD
 #ifdef PEC_STORE_KERNEL
 #include <linux/slab.h>
 #include <linux/types.h>

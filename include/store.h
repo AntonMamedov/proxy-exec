@@ -1,7 +1,7 @@
 #ifndef STORE_H
 #define STORE_H
 
-//#define PEC_STORE_KERNEL
+#define PEC_STORE_KERNEL
 
 #ifdef PEC_STORE_KERNEL
 #include <linux/kernel.h>
