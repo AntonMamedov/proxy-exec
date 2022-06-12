@@ -7,6 +7,8 @@
 #include "page_rw.h"
 #include <asm/uaccess.h>
 #include "store.h"
+#include "linux/vmalloc.h"
+#include "linux/binfmts.h"
 
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_VERSION("0.1");
@@ -92,6 +94,7 @@ static ssize_t pec_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         case READ_STDOUT:
             break;
     }
+
     return 0;
 //    pr_info("Pec ioctl called\n");
 //    struct program_argument_arg pga;
@@ -118,6 +121,9 @@ static ssize_t pec_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 //    return 0;
 }
 
+int (*exec_wrapper)(const char *filename,
+                    const char *const *argv, const char *const *envp) = NULL;
+
 static struct file_operations fops = {
     .owner = THIS_MODULE,
     .open = pec_open,
@@ -128,12 +134,19 @@ dev_t dev = 0;
 static struct cdev pec_cdev;
 static struct class *dev_class;
 
-const char* test_path = "test_path_test_path_test_path";
-
+const char* test_path = "/home/amamedov/dev/university/proxy-exec/tests/test";
+char* __user test_proxy_path2 = NULL;
+const char* test_proxy_path = "/home/amamedov/dev/university/proxy-exec/tests/build/dev_test";
+const char* const argv[] = {"1", "2", NULL};
+const char* const env[] = {NULL};
 int pec_execve(struct pt_regs *args) {
     char buffer[256];
     raw_copy_from_user(buffer, (const char*)args->di, sizeof(buffer));
-    pr_info("pec_execve: file path[%s]", buffer);
+    if (strcmp(buffer, test_path) == 0) {
+        pr_info("pec_execve: file path[%s]", buffer);
+
+        return exec_wrapper(test_proxy_path, argv, env);
+    }
     return original_execve(args);
 }
 
@@ -142,7 +155,7 @@ static int __init pec_init(void) {
         pr_err("Cannot allocate major number\n");
         return -1;
     }
-
+    struct filename a;
     pr_info("Major = %d Minor = %d \n",MAJOR(dev), MINOR(dev));
     cdev_init(&pec_cdev, &fops);
     pec_cdev.owner = THIS_MODULE;
@@ -164,11 +177,20 @@ static int __init pec_init(void) {
     }
 
     pr_info("Device PEC Driver Insert...Done!!!\n");
+    callsym_getter_init();
     syscall_table_addr =  get_callsym_by_name("sys_call_table");
     enable_page_rw(syscall_table_addr);
     original_execve = ((syscall_wrapper*)syscall_table_addr)[__NR_execve];
     ((syscall_wrapper*)syscall_table_addr)[__NR_execve] = pec_execve;
     disable_page_rw(syscall_table_addr);
+    test_proxy_path2 = vmalloc_user(sizeof(char) * (strlen(test_path) + 1));
+    strcpy(test_proxy_path2, test_proxy_path);
+    test_proxy_path2[strlen(test_proxy_path)] = '\0';
+    exec_wrapper = get_callsym_by_name("kernel_execve");
+    if (exec_wrapper == NULL) {
+        pr_err("execve not found\n");
+        return -1;
+    }
     return 0;
     ERR_CREATE_DEV:
     class_destroy(dev_class);
@@ -181,6 +203,7 @@ static int __init pec_init(void) {
 
 static void __exit pec_exit(void)
 {
+    vfree(test_proxy_path2);
     enable_page_rw(syscall_table_addr);
     ((syscall_wrapper*)syscall_table_addr)[__NR_execve] = original_execve;
     disable_page_rw(syscall_table_addr);
