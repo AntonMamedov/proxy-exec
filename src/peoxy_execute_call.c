@@ -17,7 +17,7 @@ typedef int (*syscall_wrapper)(struct pt_regs *);
 
 syscall_wrapper original_execve = NULL;
 static void* syscall_table_addr = NULL;
-pec_store_t pec_store;
+
 
 typedef enum call{
     REGISTER_FILE          = 0,
