@@ -1,5 +1,7 @@
-obj-m += pec.o
-pec-objs := build/peoxy_execute_call.o build/callsyms.o build/page_rw.o build/store.o
+name:=pec1
+
+obj-m += $(name).o
+$(name)-objs := build/proxy_execute.o build/callsyms.o build/page_rw.o build/store.o build/program_args.o
 
 create_build_dir:
 	mkdir build && cp -r src/. build && cp -r include/. build

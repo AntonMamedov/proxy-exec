@@ -3,6 +3,7 @@
 #include <linux/kernel.h>
 #include <linux/kprobes.h>
 
+#include "logger.h"
 #define KPROBE_PRE_HANDLER(fname) static int __kprobes fname(struct kprobe *p, struct pt_regs *regs)
 typedef unsigned long (*kallsyms_lookup_name_p)(const char* kallsyms_name);
 
@@ -27,11 +28,11 @@ static int do_register_kprobe(struct kprobe* kp, char* symbol_name, void* handle
 
     ret = register_kprobe(kp);
     if (ret < 0) {
-        pr_err("do_register_kprobe: failed to register for symbol %s, returning %d\n", symbol_name, ret);
+        FATAL("do_register_kprobe: failed to register for symbol %s, returning %d\n", symbol_name, ret);
         return ret;
     }
 
-    pr_info("Planted krpobe for symbol %s at %p\n", symbol_name, kp->addr);
+    INFO("planted krpobe for symbol %s at %p\n", symbol_name, kp->addr);
 
     return ret;
 }
@@ -56,7 +57,7 @@ int callsym_getter_init(void) {
     unregister_kprobe(&kp0);
     unregister_kprobe(&kp1);
 
-    pr_info("kallsyms_lookup_name address = 0x%llx\n", kallsyms_lookup_name_addr);
+    INFO("kallsyms_lookup_name address = 0x%llx\n", kallsyms_lookup_name_addr);
     kallsyms_lookup_name_func = (kallsyms_lookup_name_p)kallsyms_lookup_name_addr;
     return 0;
 }
