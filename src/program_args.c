@@ -141,12 +141,6 @@ static const char __user *get_user_arg_ptr(struct user_arg_ptr argv, int nr)
     return native;
 }
 
-static bool valid_arg_len(long len)
-{
-    return len <= MAX_ARG_STRLEN;
-}
-
-
 /*
  * count() counts the number of strings in array ARGV.
  */

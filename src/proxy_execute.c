@@ -78,7 +78,7 @@ static void pec_destroy_symbols(void) {
 static struct file_operations fops = {
     .owner = THIS_MODULE,
     .open = pec_open,
-    .unlocked_ioctl = pec_ioctl
+    .unlocked_ioctl = pec_ioctl,
 };
 
 static struct {
@@ -98,6 +98,7 @@ static int __init pec_init(void) {
         unregister_chrdev_region(device.dev, 1);
         FATAL("cannot add the device to the system\n");
     }
+    struct file *file
 
     if ((device.dev_class = class_create(THIS_MODULE, modname)) == NULL) {
         unregister_chrdev_region(device.dev, 1);
