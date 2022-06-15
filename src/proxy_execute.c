@@ -10,14 +10,31 @@
 #include "page_rw.h"
 #include "logger.h"
 #include "program_args.h"
+#include "store.h"
 
 typedef enum pec_call pec_call_t;
 typedef int (*syscall_t)(struct pt_regs*);
 
-static int pec_execve(struct pt_regs *args);
-static int pec_open(struct inode *inode, struct file *file);
-static ssize_t set_program_args(struct file *file, unsigned int cmd, unsigned long arg);
-static ssize_t pec_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
+int pec_execve(struct pt_regs *args);
+int pec_open(struct inode *inode, struct file *file);
+ssize_t pec_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
+ssize_t pec_read (struct file *f, char __user *d, size_t size, loff_t *);
+ssize_t pec_write (struct file *, const char __user *, size_t, loff_t *);
+
+static pec_store_t store;
+
+enum entity_type{
+    PROXY = 1 << 0,
+    SERVICE = 1 << 1,
+    REGISTRAR = 1 << 2
+};
+
+struct pec_data {
+    enum entity_type type;
+    struct task_struct service_task;
+    uint32_t service_PID;
+    uint32_t proxy_PID;
+};
 
 static struct{
     struct filename* (*getname)(const char*);
@@ -64,9 +81,10 @@ static int pec_init_symbols(void) {
         FATAL("symbol 'execve' not found in syscall_table\n");
         return -1;
     }
-
+    pec_store_init(&store);
     return 0;
 }
+
 
 static void pec_destroy_symbols(void) {
     enable_page_rw(pec_meta.syscall_table);
@@ -79,6 +97,8 @@ static struct file_operations fops = {
     .owner = THIS_MODULE,
     .open = pec_open,
     .unlocked_ioctl = pec_ioctl,
+    .read = pec_read,
+    .write = pec_write
 };
 
 static struct {
@@ -98,7 +118,7 @@ static int __init pec_init(void) {
         unregister_chrdev_region(device.dev, 1);
         FATAL("cannot add the device to the system\n");
     }
-    struct file *file
+    struct file *file;
 
     if ((device.dev_class = class_create(THIS_MODULE, modname)) == NULL) {
         unregister_chrdev_region(device.dev, 1);
@@ -136,19 +156,18 @@ enum pec_call {
     REGISTER_PROXY_SERVICE = 2,
     SET_PROGRAM_ARGS       = 3,
     SET_ENVS               = 4,
-    SET_SIGNAL             = 5,
-    WRITE_STDIN            = 6,
-    READ_STDOUT            = 7,
+    WRITE_STDOUT            = 6,
+    READ_STDIN            = 7,
 };
 
-int pec_open(struct inode *inode, struct file *file) {
-    return 0;
-}
 
-
-ssize_t set_program_args(struct file *file, unsigned int cmd, unsigned long arg) {
-    return 0;
-}
+ssize_t set_program_args(struct file *file, unsigned int cmd, unsigned long arg);
+ssize_t register_file(struct file *file, unsigned int cmd, unsigned long arg);
+ssize_t register_proxy_process(struct file *file, unsigned int cmd, unsigned long arg);
+ssize_t register_service_process(struct file *file, unsigned int cmd, unsigned long arg);
+ssize_t wrute_stdout(struct file *file, unsigned int cmd, unsigned long arg);
+ssize_t set_envs(struct file *file, unsigned int cmd, unsigned long arg);
+ssize_t read_stdin(struct file *file, unsigned int cmd, unsigned long arg);
 
 ssize_t pec_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
     if (cmd > 7)
@@ -156,33 +175,30 @@ ssize_t pec_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
     pec_call_t call = (pec_call_t)cmd;
     switch (call) {
         case REGISTER_FILE:
+            register_file(file, cmd, arg);
             break;
         case REGISTER_PROXY_PROCESS:
+            register_proxy_process(file, cmd, arg);
             break;
         case REGISTER_PROXY_SERVICE:
+            register_service_process(file, cmd, arg);
             break;
         case SET_PROGRAM_ARGS:
             return set_program_args(file, cmd, arg);
         case SET_ENVS:
+            set_envs(file, cmd, arg);
             break;
-        case SET_SIGNAL:
+        case WRITE_STDOUT:
+            wrute_stdout(file, cmd, arg);
             break;
-        case WRITE_STDIN:
-            break;
-        case READ_STDOUT:
+        case READ_STDIN:
+            read_stdin(file, cmd, arg);
             break;
     }
 
     return 0;
 }
 
-uint32_t get_file_id(const char* file) {
-    uint32_t ID = 0;
-    size_t i;
-    for (i = 0; file[i] != '0'; i++)
-        ID += file[i];
-    return ID;
-}
 
 int pec_execve(struct pt_regs *args) {
     struct filename* fln = pec_meta.getname((const char*)args->di);
