@@ -13,8 +13,12 @@ struct program_argument_arg {
 };
 
 char* argv[3] = {"arg1", "arg2", "arg3"};
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 int main() {
+
 //    struct program_argument_arg pga = {
 //            .argc = 3,
 //            .argv = argv

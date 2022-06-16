@@ -3,7 +3,7 @@
 #include <linux/kernel.h>
 #include <linux/fs.h>
 typedef struct program_args {
-    struct filename* file;
+    char* file;
     char** arg;
     char** envp;
 } program_args_t;

@@ -11,29 +11,39 @@
 #include "logger.h"
 #include "program_args.h"
 #include "store.h"
+#include "pec_buffer.h"
 
 typedef enum pec_call pec_call_t;
 typedef int (*syscall_t)(struct pt_regs*);
 
 int pec_execve(struct pt_regs *args);
-int pec_open(struct inode *inode, struct file *file);
-ssize_t pec_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
-ssize_t pec_read (struct file *f, char __user *d, size_t size, loff_t *);
+
+int pec_open(struct inode *, struct file *);
+ssize_t pec_ioctl(struct file *, unsigned int, unsigned long);
+ssize_t pec_read (struct file *, char __user *, size_t size, loff_t *);
 ssize_t pec_write (struct file *, const char __user *, size_t, loff_t *);
 
 static pec_store_t store;
 
-enum entity_type{
-    PROXY = 1 << 0,
-    SERVICE = 1 << 1,
-    REGISTRAR = 1 << 2
+enum entity_type {
+    UNDEFINE = 0,
+    SERVICE,
+    SERVICE_WORKER,
+    PROXY
 };
 
-struct pec_data {
-    enum entity_type type;
-    struct task_struct service_task;
-    uint32_t service_PID;
-    uint32_t proxy_PID;
+struct pec_service_data {
+    service_node_t *service_node;
+};
+
+struct pec_service_worker_data {
+    service_node_t *service_node;
+    proxy_node_t* proxy_node;
+};
+
+struct pec_proxy_data {
+    service_node_t *service_node;
+    proxy_node_t* proxy_node;
 };
 
 static struct{
@@ -151,62 +161,198 @@ module_exit(pec_exit);
 
 
 enum pec_call {
-    REGISTER_FILE          = 0,
-    REGISTER_PROXY_PROCESS = 1,
-    REGISTER_PROXY_SERVICE = 2,
-    SET_PROGRAM_ARGS       = 3,
-    SET_ENVS               = 4,
-    WRITE_STDOUT            = 6,
-    READ_STDIN            = 7,
+    REGISTER_FILE = 0,
+    INIT_SERVICE = 1,
+    REGISTER_SERVICE = 2,
+    INIT_PROXY = 3,
 };
 
+struct register_service_data {
+    const char* file;
+    uint64_t service_id;
+};
 
-ssize_t set_program_args(struct file *file, unsigned int cmd, unsigned long arg);
-ssize_t register_file(struct file *file, unsigned int cmd, unsigned long arg);
-ssize_t register_proxy_process(struct file *file, unsigned int cmd, unsigned long arg);
-ssize_t register_service_process(struct file *file, unsigned int cmd, unsigned long arg);
-ssize_t wrute_stdout(struct file *file, unsigned int cmd, unsigned long arg);
-ssize_t set_envs(struct file *file, unsigned int cmd, unsigned long arg);
-ssize_t read_stdin(struct file *file, unsigned int cmd, unsigned long arg);
+ssize_t register_file(struct file *file, const char* __user arg);
+ssize_t init_service(struct file *file);
+ssize_t register_service(struct file *file,  const char __user* arg);
+ssize_t init_proxy(struct file *file,  uint64_t proxy_ID);
+
+#define PATH_TO_PROXY ""
+
+int pec_execve(struct pt_regs *args) {
+    struct filename* fln = pec_meta.getname((const char*)args->di);
+    service_node_t * pn = NULL;
+    uint64_t service_id = 0;
+    enum pec_store_error err = pec_store_get_service_by_file(&store, fln, &pn);
+    pec_meta.putname(fln);
+    if (err != OK) {
+        return pec_meta.original_execve(args);
+    }
+    service_id = pn->ID;
+    uint64_t proxy_id = 0;
+    program_args_t* pg = new_program_args((const char*)args->di, (const char* const*) args->si, (const char* const*)args->dx, pec_meta.getname, pec_meta.putname);
+    err = pec_store_create_proxy(&store, service_id, pg, &proxy_id);
+    if (err != OK) {
+        destroy_program_args(pg, pec_meta.putname);
+        return -1;
+    }
+    INFO("a request was made to execute the file %s, an id=%llu was assigned to the proxy process", pg->file, proxy_id);
+    char c_str_number[15];
+    memset(c_str_number, 0, 15);
+    sprintf(c_str_number, "%llu", proxy_id);
+    const char* execve_kernel_args[] = {c_str_number, NULL};
+    const char* execve_kernel_envs[] = {NULL};
+    return pec_meta.kernel_execve(PATH_TO_PROXY, execve_kernel_args, execve_kernel_envs);
+}
+
+int pec_open(struct inode *inode, struct file *file) {
+    return 0;
+}
+
+ssize_t pec_read (struct file *file, char __user *str, size_t size, loff_t *) {
+    enum entity_type type = file->f_mode;
+    struct pec_ring_buffer* r_buff = NULL;
+    wait_queue_head_t * wait = NULL;
+    spinlock_t* lock = NULL;
+    switch (type) {
+        case UNDEFINE:
+            return -1;
+        case SERVICE:
+            return -1;
+        case SERVICE_WORKER: {
+            struct pec_service_worker_data * data = (struct pec_service_worker_data *) file->private_data;
+            r_buff = &data->proxy_node->stdin;
+            wait = &data->proxy_node->service_read_tasks;
+            lock = &data->proxy_node->stdin_lock;
+            break;
+        }
+        case PROXY: {
+            struct pec_proxy_data * data = (struct pec_proxy_data *) file->private_data;
+            r_buff = &data->proxy_node->stdout;
+            wait = &data->proxy_node->proxy_read_tasks;
+            lock = &data->proxy_node->stdout_lock;
+        }
+            break;
+    }
+    wait_event_interruptible(*wait, (r_buff->payload_len > 0));
+    spin_lock(lock);
+    ssize_t bytes_read = pec_ring_buffer_read(r_buff, str, size);
+    spin_unlock(lock);
+    return bytes_read;
+    file->f_lock
+}
+
+ssize_t pec_write (struct file *file, const char __user *str, size_t size, loff_t *) {
+    enum entity_type type = file->f_mode;
+    struct pec_ring_buffer* r_buff = NULL;
+    wait_queue_head_t * wait = NULL;
+    spinlock_t* lock = NULL;
+
+    switch (type) {
+        case UNDEFINE:
+            return -1;
+        case SERVICE:
+            return -1;
+        case SERVICE_WORKER: {
+            struct pec_service_worker_data * data = (struct pec_service_worker_data *) file->private_data;
+            r_buff = &data->proxy_node->stdout;
+            wait = &data->proxy_node->proxy_read_tasks;
+            lock = &data->proxy_node->stdout_lock;
+        }
+            break;
+        case PROXY: {
+            struct pec_proxy_data * data = (struct pec_proxy_data *) file->private_data;
+            r_buff = &data->proxy_node->stdin;
+            wait = &data->proxy_node->service_read_tasks;
+            lock = &data->proxy_node->stdin_lock;
+        }
+            break;
+    }
+    spin_lock(lock);
+    pec_ring_buffer_write(r_buff, str, size);
+    spin_unlock(lock);
+    wake_up(wait);
+}
 
 ssize_t pec_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
     if (cmd > 7)
         return -EPERM;
-    pec_call_t call = (pec_call_t)cmd;
+
+    enum pec_call call = cmd;
     switch (call) {
         case REGISTER_FILE:
-            register_file(file, cmd, arg);
-            break;
-        case REGISTER_PROXY_PROCESS:
-            register_proxy_process(file, cmd, arg);
-            break;
-        case REGISTER_PROXY_SERVICE:
-            register_service_process(file, cmd, arg);
-            break;
-        case SET_PROGRAM_ARGS:
-            return set_program_args(file, cmd, arg);
-        case SET_ENVS:
-            set_envs(file, cmd, arg);
-            break;
-        case WRITE_STDOUT:
-            wrute_stdout(file, cmd, arg);
-            break;
-        case READ_STDIN:
-            read_stdin(file, cmd, arg);
-            break;
+            return register_file(file, arg);
+        case REGISTER_SERVICE:
+            return register_service(file, arg);
+        case INIT_SERVICE:
+            return init_service(file);
+        case INIT_PROXY:
+            return init_proxy(file, arg);
     }
+}
 
+ssize_t register_file(struct file *file, const char __user*  arg) {
+    struct filename* f = pec_meta.getname(arg);
+    if (pec_store_register_file(&store, f) == FILE_ALREADY_EXISTS) {
+        return -EBUSY;
+    }
     return 0;
 }
 
+ssize_t init_service(struct file *file) {
+    uint64_t service_id = 0;
+    service_node_t * sn = NULL;
+    enum pec_store_error err = pec_store_create_service(&store, &sn);
+    if (err != OK) {
+        return -EPERM;
+    }
+    struct pec_service_data* d = vmalloc(sizeof(struct pec_service_data*));
+    file->private_data = d;
+    return sn->ID;
+}
 
-int pec_execve(struct pt_regs *args) {
-    struct filename* fln = pec_meta.getname((const char*)args->di);
+ssize_t register_service(struct file *file,  const char __user* arg) {
+    struct filename* fname = pec_meta.getname(arg);
+    uint64_t service_id = ((struct pec_service_data*)file->private_data)->service_node->ID;
+    uint64_t file_id = 0;
+    enum pec_store_error err = pec_store_associate_service_with_file(&store, service_id, fname, &file_id);
+    vfree(fname);
+    switch (err) {
+        case OK:
+            return file_id;
+        default:
+            break;
+    }
+    return -EPERM;
+}
 
-    new_program_args((const char*)args->di, (const char* const*) args->si, (const char* const*)args->dx, pec_meta.getname, pec_meta.putname);
-    return pec_meta.original_execve(args);
+ssize_t init_proxy(struct file *file,  uint64_t proxy_ID) {
+    proxy_node_t* n = NULL;
+    pec_store_get_proxy_data(&store, proxy_ID, &n);
+    if (n == NULL) {
+        return -1;
+    }
+    struct pec_proxy_data* data = vmalloc(sizeof(struct pec_proxy_data*));
+    data->proxy_node = n;
+    data->service_node = get_service_node_by_id(&store, n->service_ID);
+    file->private_data = data;
+    return 0;
+}
+
+ssize_t register_service_worker(struct file *file,  uint64_t proxy_ID) {
+    proxy_node_t* n = NULL;
+    pec_store_get_proxy_data(&store, proxy_ID, &n);
+    if (n == NULL) {
+        return -1;
+    }
+    struct pec_proxy_data* data = vmalloc(sizeof(struct pec_proxy_data*));
+    data->proxy_node = n;
+    data->service_node = get_service_node_by_id(&store, n->service_ID);
+    file->private_data = data;
+    return 0;
 }
 
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_VERSION("0.1");
 MODULE_AUTHOR("Mamedov Anton");
+

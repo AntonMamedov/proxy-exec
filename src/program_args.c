@@ -28,15 +28,14 @@ program_args_t* new_program_args(const char __user *path, const char __user *con
     program_args_t* pr_args = vzalloc(sizeof(program_args_t));
     if (pr_args == NULL)
         return NULL;
-
-    pr_args->file = getname(path);
-    if (pr_args == NULL)
-        goto OUT_FREE;
+    struct filename* fname = getname(path);
+    pr_args->file = vzalloc(strlen(fname->name + 1));
+    strcpy(pr_args->file, fname->name);
 
     struct user_arg_ptr argv = { .ptr.native = args };
     struct user_arg_ptr envs = { .ptr.native = envp };
     int retval = count(argv, MAX_ARG_STRINGS);
-    INFO("filename=%s, argv_count=%d", pr_args->file->name, retval);
+    INFO("filename=%s, argv_count=%d", pr_args->file, retval);
     if (retval < 0)
         goto OUT_FREE;
 
@@ -62,11 +61,11 @@ program_args_t* new_program_args(const char __user *path, const char __user *con
             goto OUT_FREE;
         }
         if (pr_args->arg[i] != NULL)
-            INFO("file=%s argv[%lu] = %s\n",pr_args->file->name,i, pr_args->arg[i]);
+            INFO("file=%s argv[%lu] = %s\n",pr_args->file,i, pr_args->arg[i]);
     }
 
     retval = count(envs, MAX_ARG_STRINGS);
-    INFO("filename=%s, env_count=%d", pr_args->file->name, retval);
+    INFO("filename=%s, env_count=%d", pr_args->file, retval);
     if (retval < 0)
         goto OUT_FREE;
     pr_args->envp = vzalloc(sizeof(char*) * retval + 1);
@@ -90,7 +89,7 @@ program_args_t* new_program_args(const char __user *path, const char __user *con
             goto OUT_FREE;
         }
         if (pr_args->envp[i] != NULL)
-            INFO("file=%s envp[%lu] = %s\n",pr_args->file->name, i, pr_args->envp[i]);
+            INFO("file=%s envp[%lu] = %s\n",pr_args->file, i, pr_args->envp[i]);
     }
     return pr_args;
     OUT_FREE:
@@ -102,7 +101,7 @@ void destroy_program_args(program_args_t *dst, void (*putname)(struct filename *
     if (dst == NULL)
         return;
     if (dst->file != NULL)
-        putname(dst->file);
+        vfree(dst->file);
     if (dst->arg != NULL) {
         size_t i;
         for (i = 0; dst->arg[i] != NULL; i++)
